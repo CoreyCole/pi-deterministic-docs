@@ -1,0 +1,36 @@
+{
+  "name": "pi-deterministic-docs",
+  "version": "0.1.0",
+  "description": "Pi extension that deterministically injects nearest project docs when files are read.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "deterministic-docs",
+    "agents-md"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/CoreyCole/pi-deterministic-docs.git"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/deterministic-docs"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-ai": "^0.67.68",
+    "@mariozechner/pi-coding-agent": "^0.67.68",
+    "@mariozechner/pi-tui": "^0.67.68",
+    "@types/node": "^20.19.26",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  }
+}
