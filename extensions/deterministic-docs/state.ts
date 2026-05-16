@@ -1,4 +1,4 @@
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { DocsCandidate, DeterministicDocsStateEntry, DeterministicDocsStateSnapshot } from "./types";
 
 export const DETERMINISTIC_DOCS_STATE_TYPE = "deterministic-docs-state";

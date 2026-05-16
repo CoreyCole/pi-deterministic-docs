@@ -1,6 +1,6 @@
-import type { ExtensionAPI, ReadToolDetails } from "@mariozechner/pi-coding-agent";
-import { createReadToolDefinition } from "@mariozechner/pi-coding-agent";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { ExtensionAPI, ReadToolDetails } from "@earendil-works/pi-coding-agent";
+import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { findAncestorDocsFiles, resolveReadTarget } from "./paths";
 import { hashDocFile } from "./hash";
 import { rememberDocsFile, restoreDeterministicDocsState, shouldReadDocsFile } from "./state";
