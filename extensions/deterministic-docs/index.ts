@@ -1,10 +1,8 @@
 import type { ExtensionAPI, ReadToolDetails } from "@mariozechner/pi-coding-agent";
 import { createReadToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
-import { Text } from "@mariozechner/pi-tui";
 import { findAncestorDocsFiles, resolveReadTarget } from "./paths";
 import { hashDocFile } from "./hash";
-import { formatDeterministicDocsSummary } from "./render";
 import { rememberDocsFile, restoreDeterministicDocsState, shouldReadDocsFile } from "./state";
 import type { DeterministicDocsReadDetails, DeterministicDocsStateEntry } from "./types";
 
@@ -65,9 +63,18 @@ function shouldRememberExplicitTarget(params: { offset?: number; limit?: number 
   return params.offset === undefined && params.limit === undefined;
 }
 
+const readTools = new Map<string, ReturnType<typeof createReadToolDefinition>>();
+
+function getReadTool(cwd: string) {
+  let tool = readTools.get(cwd);
+  if (!tool) {
+    tool = createReadToolDefinition(cwd);
+    readTools.set(cwd, tool);
+  }
+  return tool;
+}
+
 export default function deterministicDocs(pi: ExtensionAPI) {
-  const cwd = process.cwd();
-  const originalRead = createReadToolDefinition(cwd);
   let state = { byPath: new Map<string, DeterministicDocsStateEntry>() };
   let inFlightLoads = new Map<string, Promise<AutoLoadedDocsRead>>();
 
@@ -76,113 +83,80 @@ export default function deterministicDocs(pi: ExtensionAPI) {
     inFlightLoads = new Map<string, Promise<AutoLoadedDocsRead>>();
   });
 
-  pi.registerTool({
-    name: "read",
-    label: originalRead.label,
-    description: originalRead.description,
-    promptSnippet: originalRead.promptSnippet,
-    promptGuidelines: originalRead.promptGuidelines,
-    parameters: originalRead.parameters,
+  pi.on("tool_result", async (event, ctx) => {
+    if (event.toolName !== "read") return undefined;
 
-    async execute(toolCallId, params, signal, onUpdate, ctx) {
-      const target = resolveReadTarget(cwd, params.path);
-      const candidates = findAncestorDocsFiles(target.absolutePath);
-      const explicitContextPath = candidates.find((docPath) => docPath === target.absolutePath);
-      const autoLoaded: AutoLoadedDocsRead[] = [];
-      const skipped: string[] = [];
-      let targetResultPromise: Promise<ReadResult> | undefined;
+    const params = event.input as { path: string; offset?: number; limit?: number };
+    if (!params?.path) return undefined;
 
-      if (explicitContextPath && shouldRememberExplicitTarget(params)) {
-        const hash = hashDocFile(explicitContextPath);
-        if (shouldReadDocsFile(state, { path: explicitContextPath, hash })) {
-          const key = inFlightKey(explicitContextPath, hash);
-          if (!inFlightLoads.has(key)) {
-            targetResultPromise = originalRead.execute(toolCallId, params, signal, onUpdate, ctx) as Promise<ReadResult>;
-            const loadPromise = targetResultPromise.then((result) => {
-              const entry: DeterministicDocsStateEntry = {
-                path: explicitContextPath,
-                hash,
-                loadedAt: new Date().toISOString(),
-                triggerPath: target.absolutePath,
-              };
-              rememberDocsFile(state, entry, pi.appendEntry);
-              return { entry, result };
-            });
-            loadPromise.catch(() => undefined);
-            loadPromise
-              .finally(() => {
-                if (inFlightLoads.get(key) === loadPromise) inFlightLoads.delete(key);
-              })
-              .catch(() => undefined);
-            inFlightLoads.set(key, loadPromise);
-          }
-        }
+    const cwd = ctx.cwd;
+    const readTool = getReadTool(cwd);
+    const target = resolveReadTarget(cwd, params.path);
+    const candidates = findAncestorDocsFiles(target.absolutePath);
+    const explicitContextPath = candidates.find((docPath) => docPath === target.absolutePath);
+    const autoLoaded: AutoLoadedDocsRead[] = [];
+    const skipped: string[] = [];
+    const targetResult = {
+      content: event.content,
+      details: event.details,
+    } as ReadResult;
+
+    if (explicitContextPath && shouldRememberExplicitTarget(params)) {
+      const hash = hashDocFile(explicitContextPath);
+      if (shouldReadDocsFile(state, { path: explicitContextPath, hash })) {
+        const entry: DeterministicDocsStateEntry = {
+          path: explicitContextPath,
+          hash,
+          loadedAt: new Date().toISOString(),
+          triggerPath: target.absolutePath,
+        };
+        rememberDocsFile(state, entry, pi.appendEntry);
+      }
+    }
+
+    for (const docPath of candidates) {
+      if (docPath === target.absolutePath) {
+        skipped.push(docPath);
+        continue;
       }
 
-      for (const docPath of candidates) {
-        if (docPath === target.absolutePath) {
-          skipped.push(docPath);
-          continue;
-        }
-
-        const hash = hashDocFile(docPath);
-        if (!shouldReadDocsFile(state, { path: docPath, hash })) {
-          skipped.push(docPath);
-          continue;
-        }
-
-        const key = inFlightKey(docPath, hash);
-        const inFlightLoad = inFlightLoads.get(key);
-        if (inFlightLoad) {
-          await inFlightLoad;
-          skipped.push(docPath);
-          continue;
-        }
-
-        const loadPromise = (async () => {
-          const result = (await originalRead.execute(toolCallId, { path: docPath }, signal, onUpdate, ctx)) as ReadResult;
-          const entry: DeterministicDocsStateEntry = {
-            path: docPath,
-            hash,
-            loadedAt: new Date().toISOString(),
-            triggerPath: target.absolutePath,
-          };
-          rememberDocsFile(state, entry, pi.appendEntry);
-          return { entry, result };
-        })();
-        inFlightLoads.set(key, loadPromise);
-        try {
-          autoLoaded.push(await loadPromise);
-        } finally {
-          if (inFlightLoads.get(key) === loadPromise) inFlightLoads.delete(key);
-        }
+      const hash = hashDocFile(docPath);
+      if (!shouldReadDocsFile(state, { path: docPath, hash })) {
+        skipped.push(docPath);
+        continue;
       }
 
-      const targetResult = targetResultPromise
-        ? await targetResultPromise
-        : ((await originalRead.execute(toolCallId, params, signal, onUpdate, ctx)) as ReadResult);
-      return composeReadResult({ autoLoaded, skipped, targetResult });
-    },
+      const key = inFlightKey(docPath, hash);
+      const inFlightLoad = inFlightLoads.get(key);
+      if (inFlightLoad) {
+        await inFlightLoad;
+        skipped.push(docPath);
+        continue;
+      }
 
-    renderCall: originalRead.renderCall,
-    renderResult(result, options, theme, context) {
-      const readResult = result as ReadResult;
-      const autoContextContentBlocks = readResult.details?.deterministicDocs?.autoContextContentBlocks ?? 0;
-      const visibleResult =
-        autoContextContentBlocks > 0
-          ? { ...readResult, content: readResult.content.slice(autoContextContentBlocks) }
-          : readResult;
-      const base = originalRead.renderResult?.(visibleResult as any, options, theme, context as any);
-      const summary = formatDeterministicDocsSummary(readResult, options, theme);
-      if (!summary) return base ?? new Text("", 0, 0);
-      if (!base) return new Text(summary, 0, 0);
+      const loadPromise = (async () => {
+        const result = (await readTool.execute(event.toolCallId, { path: docPath }, ctx.signal, undefined, ctx)) as ReadResult;
+        const entry: DeterministicDocsStateEntry = {
+          path: docPath,
+          hash,
+          loadedAt: new Date().toISOString(),
+          triggerPath: target.absolutePath,
+        };
+        rememberDocsFile(state, entry, pi.appendEntry);
+        return { entry, result };
+      })();
+      inFlightLoads.set(key, loadPromise);
+      try {
+        autoLoaded.push(await loadPromise);
+      } finally {
+        if (inFlightLoads.get(key) === loadPromise) inFlightLoads.delete(key);
+      }
+    }
 
-      const baseLines = base
-        .render(200)
-        .map((line) => line.trimEnd())
-        .join("\n")
-        .trimEnd();
-      return new Text([summary, baseLines].filter(Boolean).join("\n"), 0, 0);
-    },
+    const patched = composeReadResult({ autoLoaded, skipped, targetResult });
+    return {
+      content: patched.content,
+      details: patched.details,
+    };
   });
 }

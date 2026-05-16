@@ -9,8 +9,8 @@ When the model reads a file, the extension finds the nearest documentation files
 For each directory from filesystem root to the read target's directory, the extension loads the first matching file by priority:
 
 1. `AGENTS.md`
-2. `CLAUDE.md`
-3. `README.md` or `readme.md`
+1. `CLAUDE.md`
+1. `README.md` or `readme.md`
 
 Each doc is loaded once per session branch and content hash. If a doc changes, it is loaded again with the new hash.
 
@@ -35,9 +35,9 @@ Then restart Pi or run:
 
 ## Usage
 
-No commands are required. The package overrides Pi's built-in `read` tool and delegates to the original implementation after injecting deterministic docs when needed.
+No commands are required. The package listens for `read` tool results and patches them with deterministic docs context. It does not override or render the `read` tool, so another extension can own `read` rendering.
 
-Example rendered output:
+Example rendered output from a compatible renderer:
 
 ```text
 read src/foo.ts
@@ -49,5 +49,5 @@ The `loaded:` lines indicate docs that were injected into the tool result sent t
 
 ## Notes
 
-- Do not load this alongside another extension that overrides the `read` tool unless you intend one override to win.
+- If you want visible `loaded:` summaries, use a renderer that reads `details.deterministicDocs.loaded` from patched read results.
 - Extensions run with your local user permissions. Review package source before installing third-party Pi packages.
