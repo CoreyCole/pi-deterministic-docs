@@ -1,13 +1,26 @@
-import type { ExtensionAPI, ReadToolDetails } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ReadToolDetails,
+} from "@earendil-works/pi-coding-agent";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { findAncestorDocsFiles, resolveReadTarget } from "./paths";
 import { hashDocFile } from "./hash";
-import { rememberDocsFile, restoreDeterministicDocsState, shouldReadDocsFile } from "./state";
-import type { DeterministicDocsReadDetails, DeterministicDocsStateEntry } from "./types";
+import { findAncestorDocsFiles, resolveReadTarget } from "./paths";
+import {
+  rememberDocsFile,
+  restoreDeterministicDocsState,
+  shouldReadDocsFile,
+} from "./state";
+import type {
+  DeterministicDocsReadDetails,
+  DeterministicDocsStateEntry,
+} from "./types";
 
 type ReadContent = TextContent | ImageContent;
-type ReadResult = { content: ReadContent[]; details: (ReadToolDetails & DeterministicDocsReadDetails) | undefined };
+type ReadResult = {
+  content: ReadContent[];
+  details: (ReadToolDetails & DeterministicDocsReadDetails) | undefined;
+};
 
 type AutoLoadedDocsRead = {
   entry: DeterministicDocsStateEntry;
@@ -19,15 +32,22 @@ function textContent(text: string): TextContent {
 }
 
 function textBlocks(result: ReadResult): string[] {
-  return result.content.flatMap((content) => (content.type === "text" ? [content.text] : []));
+  return result.content.flatMap((content) =>
+    content.type === "text" ? [content.text] : [],
+  );
 }
 
-function formatLoadedDocsSection(autoLoaded: AutoLoadedDocsRead[]): string | undefined {
+function formatLoadedDocsSection(
+  autoLoaded: AutoLoadedDocsRead[],
+): string | undefined {
   if (autoLoaded.length === 0) return undefined;
 
   const sections = autoLoaded.map(({ entry, result }) => {
     const body = textBlocks(result).join("\n").trimEnd();
-    return [`## Auto-loaded context: ${entry.path}`, body || "[context file produced no text content]"].join("\n");
+    return [
+      `## Auto-loaded context: ${entry.path}`,
+      body || "[context file produced no text content]",
+    ].join("\n");
   });
 
   return ["# Deterministic docs context", ...sections].join("\n\n");
@@ -42,15 +62,24 @@ function composeReadResult(args: {
   if (loaded.length === 0) return args.targetResult;
 
   const loadedSection = formatLoadedDocsSection(args.autoLoaded);
-  const prefix = [loadedSection].filter((part): part is string => Boolean(part));
-  const content = prefix.length > 0 ? [textContent(prefix.join("\n\n")), ...args.targetResult.content] : args.targetResult.content;
+  const prefix = [loadedSection].filter((part): part is string =>
+    Boolean(part),
+  );
+  const content =
+    prefix.length > 0
+      ? [textContent(prefix.join("\n\n")), ...args.targetResult.content]
+      : args.targetResult.content;
 
   return {
     ...args.targetResult,
     content,
     details: {
       ...(args.targetResult.details ?? {}),
-      deterministicDocs: { loaded, skipped: args.skipped, autoContextContentBlocks: prefix.length },
+      deterministicDocs: {
+        loaded,
+        skipped: args.skipped,
+        autoContextContentBlocks: prefix.length,
+      },
     },
   };
 }
@@ -59,11 +88,17 @@ function inFlightKey(path: string, hash: string): string {
   return `${path}\0${hash}`;
 }
 
-function shouldRememberExplicitTarget(params: { offset?: number; limit?: number }): boolean {
+function shouldRememberExplicitTarget(params: {
+  offset?: number;
+  limit?: number;
+}): boolean {
   return params.offset === undefined && params.limit === undefined;
 }
 
-const readTools = new Map<string, ReturnType<typeof createReadToolDefinition>>();
+const readTools = new Map<
+  string,
+  ReturnType<typeof createReadToolDefinition>
+>();
 
 function getReadTool(cwd: string) {
   let tool = readTools.get(cwd);
@@ -84,16 +119,22 @@ export default function deterministicDocs(pi: ExtensionAPI) {
   });
 
   pi.on("tool_result", async (event, ctx) => {
-    if (event.toolName !== "read") return undefined;
+    if (event.toolName !== "read" || event.isError) return undefined;
 
-    const params = event.input as { path: string; offset?: number; limit?: number };
+    const params = event.input as {
+      path: string;
+      offset?: number;
+      limit?: number;
+    };
     if (!params?.path) return undefined;
 
     const cwd = ctx.cwd;
     const readTool = getReadTool(cwd);
     const target = resolveReadTarget(cwd, params.path);
     const candidates = findAncestorDocsFiles(target.absolutePath);
-    const explicitContextPath = candidates.find((docPath) => docPath === target.absolutePath);
+    const explicitContextPath = candidates.find(
+      (docPath) => docPath === target.absolutePath,
+    );
     const autoLoaded: AutoLoadedDocsRead[] = [];
     const skipped: string[] = [];
     const targetResult = {
@@ -135,7 +176,13 @@ export default function deterministicDocs(pi: ExtensionAPI) {
       }
 
       const loadPromise = (async () => {
-        const result = (await readTool.execute(event.toolCallId, { path: docPath }, ctx.signal, undefined, ctx)) as ReadResult;
+        const result = (await readTool.execute(
+          event.toolCallId,
+          { path: docPath },
+          ctx.signal,
+          undefined,
+          ctx,
+        )) as ReadResult;
         const entry: DeterministicDocsStateEntry = {
           path: docPath,
           hash,

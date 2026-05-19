@@ -35,7 +35,7 @@ Then restart Pi or run:
 
 ## Usage
 
-No commands are required. The package listens for `read` tool results and patches them with deterministic docs context. It does not override or render the `read` tool, so another extension can own `read` rendering.
+No commands are required. The package listens for `read` tool results and patches them with deterministic docs context. It does not register, override, or render the `read` tool, so another extension can own `read` rendering or execution.
 
 Example rendered output from a compatible renderer:
 
@@ -49,5 +49,5 @@ The `loaded:` lines indicate docs that were injected into the tool result sent t
 
 ## Notes
 
-- If you want visible `loaded:` summaries, use a renderer that reads `details.deterministicDocs.loaded` from patched read results.
+- If you want visible `loaded:` summaries, use a renderer that reads `details.deterministicDocs.loaded` from patched read results and hides `details.deterministicDocs.autoContextContentBlocks` from the visible result.
 - Extensions run with your local user permissions. Review package source before installing third-party Pi packages.
