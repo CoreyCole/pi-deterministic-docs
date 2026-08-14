@@ -96,6 +96,18 @@ function isWithinCwd(canonicalCwd: string, canonicalPath: string): boolean {
   );
 }
 
+export function canonicalizeExistingFile(
+  cwd: string,
+  inputPath: string,
+): string | undefined {
+  return canonicalRegularFile(resolveReadPath(inputPath, cwd));
+}
+
+export function isInstructionFilePath(filePath: string): boolean {
+  const fileName = path.basename(expandPath(filePath));
+  return CONTEXT_FILE_NAME_PRIORITY.some((candidate) => candidate === fileName);
+}
+
 export function resolveReadTarget(
   cwd: string,
   inputPath: string,
@@ -103,7 +115,7 @@ export function resolveReadTarget(
   const canonicalCwd = canonicalDirectory(path.resolve(cwd));
   if (!canonicalCwd) return undefined;
 
-  const canonicalPath = canonicalRegularFile(resolveReadPath(inputPath, cwd));
+  const canonicalPath = canonicalizeExistingFile(cwd, inputPath);
   if (!canonicalPath || !isWithinCwd(canonicalCwd, canonicalPath)) {
     return undefined;
   }

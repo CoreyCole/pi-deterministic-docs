@@ -6,7 +6,7 @@ export interface DeterministicDocsStateEntry {
 }
 
 export interface DeterministicDocsStateSnapshot {
-  byPath: Map<string, DeterministicDocsStateEntry>;
+  seenIdentities: Set<string>;
 }
 
 export interface ResolvedReadTarget {
@@ -18,6 +18,18 @@ export interface ResolvedReadTarget {
 export interface DocsCandidate {
   path: string;
   hash: string;
+}
+
+export type ReservationLoadOutcome = "pending" | "succeeded" | "failed";
+export type ReservationTransactionOutcome =
+  | "pending"
+  | "committed"
+  | "rolled-back";
+
+export interface ReservationSnapshot extends DocsCandidate {
+  ownerToolCallId: string;
+  loadOutcome: ReservationLoadOutcome;
+  transactionOutcome: ReservationTransactionOutcome;
 }
 
 export interface DeterministicDocsReadDetails {

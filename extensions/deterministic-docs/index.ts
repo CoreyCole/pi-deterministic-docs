@@ -1,19 +1,34 @@
 import type {
   ExtensionAPI,
+  ExtensionContext,
   ReadToolDetails,
 } from "@earendil-works/pi-coding-agent";
-import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { hashDocFile } from "./hash";
-import { findAncestorDocsFiles, resolveReadTarget } from "./paths";
 import {
-  rememberDocsFile,
+  createReadToolDefinition,
+  isReadToolResult,
+  isToolCallEventType,
+} from "@earendil-works/pi-coding-agent";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import { hashDocContent, hashDocFile } from "./hash";
+import {
+  canonicalizeExistingFile,
+  findAncestorDocsFiles,
+  isInstructionFilePath,
+  resolveReadTarget,
+} from "./paths";
+import {
+  commitDocsFiles,
+  mergeSeenCandidates,
+  observationKey,
+  ReservationCoordinator,
   restoreDeterministicDocsState,
   shouldReadDocsFile,
 } from "./state";
 import type {
   DeterministicDocsReadDetails,
   DeterministicDocsStateEntry,
+  DocsCandidate,
+  ResolvedReadTarget,
 } from "./types";
 
 type ReadContent = TextContent | ImageContent;
@@ -26,6 +41,31 @@ type AutoLoadedDocsRead = {
   entry: DeterministicDocsStateEntry;
   result: ReadResult;
 };
+
+type ExplicitPreflight = {
+  target: ResolvedReadTarget;
+  candidates: DocsCandidate[];
+  reservedKeys: Set<string>;
+};
+
+type LoadInstruction = (
+  path: string,
+  toolCallId: string,
+  ctx: ExtensionContext,
+) => Promise<ReadResult>;
+
+export interface DeterministicDocsRuntimeOptions {
+  loadInstruction?: LoadInstruction;
+}
+
+class ContextLoadError extends Error {
+  readonly contextPath: string;
+
+  constructor(contextPath: string) {
+    super(`Cannot load required instruction file: ${contextPath}`);
+    this.contextPath = contextPath;
+  }
+}
 
 function textContent(text: string): TextContent {
   return { type: "text", text };
@@ -65,10 +105,10 @@ function composeReadResult(args: {
   const prefix = [loadedSection].filter((part): part is string =>
     Boolean(part),
   );
-  const content =
-    prefix.length > 0
-      ? [textContent(prefix.join("\n\n")), ...args.targetResult.content]
-      : args.targetResult.content;
+  const content = [
+    ...prefix.map(textContent),
+    ...args.targetResult.content,
+  ];
 
   return {
     ...args.targetResult,
@@ -84,15 +124,47 @@ function composeReadResult(args: {
   };
 }
 
-function inFlightKey(path: string, hash: string): string {
-  return `${path}\0${hash}`;
+function failedContextResult(
+  targetResult: ReadResult,
+  contextPath: string,
+): ReadResult & { isError: true } {
+  return {
+    content: [textContent(`Cannot load required instruction file: ${contextPath}`)],
+    details: {
+      ...(targetResult.details ?? {}),
+      deterministicDocs: {
+        loaded: [],
+        skipped: [],
+        autoContextContentBlocks: 0,
+      },
+    },
+    isError: true,
+  };
 }
 
-function shouldRememberExplicitTarget(params: {
-  offset?: number;
-  limit?: number;
-}): boolean {
+function isCompleteRead(params: { offset?: number; limit?: number }): boolean {
   return params.offset === undefined && params.limit === undefined;
+}
+
+function hashCandidates(paths: string[]): DocsCandidate[] {
+  return paths.map((candidatePath) => {
+    try {
+      return { path: candidatePath, hash: hashDocFile(candidatePath) };
+    } catch {
+      throw new ContextLoadError(candidatePath);
+    }
+  });
+}
+
+function createEntry(
+  candidate: DocsCandidate,
+  triggerPath: string,
+): DeterministicDocsStateEntry {
+  return {
+    ...candidate,
+    loadedAt: new Date().toISOString(),
+    triggerPath,
+  };
 }
 
 const readTools = new Map<
@@ -109,103 +181,273 @@ function getReadTool(cwd: string) {
   return tool;
 }
 
-export default function deterministicDocs(pi: ExtensionAPI) {
-  let state = { byPath: new Map<string, DeterministicDocsStateEntry>() };
-  let inFlightLoads = new Map<string, Promise<AutoLoadedDocsRead>>();
-
-  pi.on("session_start", async (_event, ctx) => {
-    state = restoreDeterministicDocsState(ctx);
-    inFlightLoads = new Map<string, Promise<AutoLoadedDocsRead>>();
-  });
-
-  pi.on("tool_result", async (event, ctx) => {
-    if (event.toolName !== "read" || event.isError) return undefined;
-
-    const params = event.input as {
-      path: string;
-      offset?: number;
-      limit?: number;
-    };
-    if (!params?.path) return undefined;
-
-    const cwd = ctx.cwd;
-    const readTool = getReadTool(cwd);
-    const target = resolveReadTarget(cwd, params.path);
-    if (!target) return undefined;
-
-    const candidates = findAncestorDocsFiles(target);
-    const explicitContextPath = candidates.find(
-      (docPath) => docPath === target.canonicalPath,
-    );
-    const autoLoaded: AutoLoadedDocsRead[] = [];
-    const skipped: string[] = [];
-    const targetResult = {
-      content: event.content,
-      details: event.details,
-    } as ReadResult;
-
-    if (explicitContextPath && shouldRememberExplicitTarget(params)) {
-      const hash = hashDocFile(explicitContextPath);
-      if (shouldReadDocsFile(state, { path: explicitContextPath, hash })) {
-        const entry: DeterministicDocsStateEntry = {
-          path: explicitContextPath,
-          hash,
-          loadedAt: new Date().toISOString(),
-          triggerPath: target.canonicalPath,
-        };
-        rememberDocsFile(state, entry, pi.appendEntry);
-      }
-    }
-
-    for (const docPath of candidates) {
-      if (docPath === target.canonicalPath) {
-        skipped.push(docPath);
-        continue;
-      }
-
-      const hash = hashDocFile(docPath);
-      if (!shouldReadDocsFile(state, { path: docPath, hash })) {
-        skipped.push(docPath);
-        continue;
-      }
-
-      const key = inFlightKey(docPath, hash);
-      const inFlightLoad = inFlightLoads.get(key);
-      if (inFlightLoad) {
-        await inFlightLoad;
-        skipped.push(docPath);
-        continue;
-      }
-
-      const loadPromise = (async () => {
-        const result = (await readTool.execute(
-          event.toolCallId,
-          { path: docPath },
-          ctx.signal,
-          undefined,
-          ctx,
-        )) as ReadResult;
-        const entry: DeterministicDocsStateEntry = {
-          path: docPath,
-          hash,
-          loadedAt: new Date().toISOString(),
-          triggerPath: target.canonicalPath,
-        };
-        rememberDocsFile(state, entry, pi.appendEntry);
-        return { entry, result };
-      })();
-      inFlightLoads.set(key, loadPromise);
-      try {
-        autoLoaded.push(await loadPromise);
-      } finally {
-        if (inFlightLoads.get(key) === loadPromise) inFlightLoads.delete(key);
-      }
-    }
-
-    const patched = composeReadResult({ autoLoaded, skipped, targetResult });
-    return {
-      content: patched.content,
-      details: patched.details,
-    };
-  });
+async function defaultLoadInstruction(
+  instructionPath: string,
+  toolCallId: string,
+  ctx: ExtensionContext,
+): Promise<ReadResult> {
+  return (await getReadTool(ctx.cwd).execute(
+    toolCallId,
+    { path: instructionPath },
+    ctx.signal,
+    undefined,
+    ctx,
+  )) as ReadResult;
 }
+
+export function createDeterministicDocsExtension(
+  options: DeterministicDocsRuntimeOptions = {},
+) {
+  const loadInstruction = options.loadInstruction ?? defaultLoadInstruction;
+
+  return function deterministicDocs(pi: ExtensionAPI) {
+    let startupSeen = new Map<string, DocsCandidate>();
+    let state = { seenIdentities: new Set<string>() };
+    let reservations = new ReservationCoordinator();
+    let explicitPreflights = new Map<string, ExplicitPreflight>();
+
+    const reconstructBranch = (ctx: ExtensionContext) => {
+      state = restoreDeterministicDocsState(ctx, startupSeen.values());
+      reservations = new ReservationCoordinator();
+      explicitPreflights = new Map<string, ExplicitPreflight>();
+    };
+
+    pi.on("session_start", async (_event, ctx) => {
+      startupSeen = new Map<string, DocsCandidate>();
+      reconstructBranch(ctx);
+    });
+
+    pi.on("session_tree", async (_event, ctx) => {
+      reconstructBranch(ctx);
+    });
+
+    pi.on("before_agent_start", async (event, ctx) => {
+      for (const contextFile of event.systemPromptOptions.contextFiles ?? []) {
+        if (!isInstructionFilePath(contextFile.path)) continue;
+        const canonicalPath = canonicalizeExistingFile(ctx.cwd, contextFile.path);
+        if (!canonicalPath) continue;
+
+        const candidate = {
+          path: canonicalPath,
+          hash: hashDocContent(contextFile.content),
+        };
+        startupSeen.set(
+          observationKey(candidate.path, candidate.hash),
+          candidate,
+        );
+      }
+      mergeSeenCandidates(state, startupSeen.values());
+    });
+
+    pi.on("tool_call", async (event, ctx) => {
+      if (!isToolCallEventType("read", event) || !isCompleteRead(event.input)) {
+        return undefined;
+      }
+
+      const target = resolveReadTarget(ctx.cwd, event.input.path);
+      if (!target) return undefined;
+
+      const candidatePaths = findAncestorDocsFiles(target);
+      if (!candidatePaths.includes(target.canonicalPath)) return undefined;
+
+      let candidates: DocsCandidate[];
+      try {
+        candidates = hashCandidates(candidatePaths);
+      } catch {
+        return undefined;
+      }
+
+      const reservedKeys = new Set<string>();
+      for (const candidate of candidates) {
+        if (!shouldReadDocsFile(state, candidate)) continue;
+        if (reservations.tryReserve(candidate, event.toolCallId) === "blocked") {
+          break;
+        }
+        reservedKeys.add(observationKey(candidate.path, candidate.hash));
+      }
+
+      explicitPreflights.set(event.toolCallId, {
+        target,
+        candidates,
+        reservedKeys,
+      });
+      return undefined;
+    });
+
+    pi.on("tool_result", async (event, ctx) => {
+      if (!isReadToolResult(event)) return undefined;
+
+      const preflight = explicitPreflights.get(event.toolCallId);
+      explicitPreflights.delete(event.toolCallId);
+      if (event.isError) {
+        if (preflight) {
+          reservations.finalize(
+            preflight.reservedKeys,
+            event.toolCallId,
+            "rolled-back",
+          );
+        }
+        return undefined;
+      }
+
+      const params = event.input as {
+        path?: string;
+        offset?: number;
+        limit?: number;
+      };
+      if (!params.path) return undefined;
+
+      const targetResult = {
+        content: event.content,
+        details: event.details,
+      } as ReadResult;
+      const target = resolveReadTarget(ctx.cwd, params.path);
+      if (!target) {
+        if (preflight) {
+          reservations.finalize(
+            preflight.reservedKeys,
+            event.toolCallId,
+            "rolled-back",
+          );
+        }
+        return undefined;
+      }
+
+      const candidatePaths = findAncestorDocsFiles(target);
+      const completeExplicitTarget =
+        isCompleteRead(params) && candidatePaths.includes(target.canonicalPath);
+      let candidates: DocsCandidate[];
+
+      try {
+        candidates = hashCandidates(candidatePaths).map((candidate) => {
+          if (!completeExplicitTarget || candidate.path !== target.canonicalPath) {
+            return candidate;
+          }
+          return (
+            preflight?.candidates.find(
+              (reserved) => reserved.path === target.canonicalPath,
+            ) ?? candidate
+          );
+        });
+      } catch (error) {
+        if (preflight) {
+          reservations.finalize(
+            preflight.reservedKeys,
+            event.toolCallId,
+            "rolled-back",
+          );
+        }
+        const contextPath =
+          error instanceof ContextLoadError ? error.contextPath : target.canonicalPath;
+        return failedContextResult(targetResult, contextPath);
+      }
+
+      const candidateKeys = new Set(
+        candidates.map((candidate) =>
+          observationKey(candidate.path, candidate.hash),
+        ),
+      );
+      const transactionKeys = new Set<string>();
+      if (preflight) {
+        for (const key of preflight.reservedKeys) {
+          if (candidateKeys.has(key)) {
+            transactionKeys.add(key);
+          } else {
+            reservations.finalize([key], event.toolCallId, "rolled-back");
+          }
+        }
+      }
+
+      const stagedEntries: DeterministicDocsStateEntry[] = [];
+      const autoLoaded: AutoLoadedDocsRead[] = [];
+      const skipped: string[] = [];
+
+      try {
+        for (const candidate of candidates) {
+          const isTarget = candidate.path === target.canonicalPath;
+          if (isTarget && !completeExplicitTarget) {
+            skipped.push(candidate.path);
+            continue;
+          }
+          if (!shouldReadDocsFile(state, candidate)) {
+            skipped.push(candidate.path);
+            continue;
+          }
+
+          const acquisition = await reservations.acquire(
+            candidate,
+            event.toolCallId,
+            () => !shouldReadDocsFile(state, candidate),
+            ctx.signal,
+          );
+          if (acquisition === "skipped") {
+            skipped.push(candidate.path);
+            continue;
+          }
+
+          const key = observationKey(candidate.path, candidate.hash);
+          transactionKeys.add(key);
+          const entry = createEntry(candidate, target.canonicalPath);
+          if (isTarget) {
+            reservations.markLoadSucceeded(key, event.toolCallId);
+            stagedEntries.push(entry);
+            continue;
+          }
+
+          try {
+            const result = await loadInstruction(
+              candidate.path,
+              event.toolCallId,
+              ctx,
+            );
+            reservations.markLoadSucceeded(key, event.toolCallId);
+            stagedEntries.push(entry);
+            autoLoaded.push({ entry, result });
+          } catch {
+            reservations.markLoadFailed(key, event.toolCallId);
+            throw new ContextLoadError(candidate.path);
+          }
+        }
+
+        const committedEntries = commitDocsFiles(
+          state,
+          stagedEntries,
+          pi.appendEntry,
+        );
+        const committedKeys = new Set(
+          committedEntries.map((entry) => observationKey(entry.path, entry.hash)),
+        );
+        const committedAutoLoads = autoLoaded.filter(({ entry }) =>
+          committedKeys.has(observationKey(entry.path, entry.hash)),
+        );
+        reservations.finalize(
+          transactionKeys,
+          event.toolCallId,
+          "committed",
+        );
+
+        if (committedAutoLoads.length === 0) return undefined;
+        const patched = composeReadResult({
+          autoLoaded: committedAutoLoads,
+          skipped,
+          targetResult,
+        });
+        return {
+          content: patched.content,
+          details: patched.details,
+        };
+      } catch (error) {
+        reservations.finalize(
+          transactionKeys,
+          event.toolCallId,
+          "rolled-back",
+        );
+        const contextPath =
+          error instanceof ContextLoadError ? error.contextPath : target.canonicalPath;
+        return failedContextResult(targetResult, contextPath);
+      }
+    });
+  };
+}
+
+export default createDeterministicDocsExtension();
