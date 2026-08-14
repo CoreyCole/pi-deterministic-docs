@@ -32,12 +32,12 @@ import type {
 } from "./types";
 
 type ReadContent = TextContent | ImageContent;
-type ReadResult = {
+export type ReadResult = {
   content: ReadContent[];
   details: (ReadToolDetails & DeterministicDocsReadDetails) | undefined;
 };
 
-type AutoLoadedDocsRead = {
+export type AutoLoadedDocsRead = {
   entry: DeterministicDocsStateEntry;
   result: ReadResult;
 };
@@ -93,7 +93,7 @@ function formatLoadedDocsSection(
   return ["# Deterministic docs context", ...sections].join("\n\n");
 }
 
-function composeReadResult(args: {
+export function composeReadResult(args: {
   autoLoaded: AutoLoadedDocsRead[];
   skipped: string[];
   targetResult: ReadResult;

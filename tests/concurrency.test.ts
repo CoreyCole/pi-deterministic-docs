@@ -1,117 +1,12 @@
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createDeterministicDocsExtension,
-  type DeterministicDocsRuntimeOptions,
-} from "../extensions/deterministic-docs/index";
 import { hashDocContent } from "../extensions/deterministic-docs/hash";
-import type { DeterministicDocsReadDetails } from "../extensions/deterministic-docs/types";
+import {
+  ExtensionHarness,
+  loadedPaths,
+  textBlocks,
+} from "./extension-harness";
 import { createFixture, type Fixture } from "./fixtures";
-
-type Handler = (
-  event: unknown,
-  ctx: ExtensionContext,
-) => Promise<unknown> | unknown;
-
-type ReadPatch = {
-  content?: (TextContent | ImageContent)[];
-  details?: DeterministicDocsReadDetails;
-  isError?: boolean;
-};
-
-class ExtensionHarness {
-  readonly appended: Array<{ customType: string; data: unknown }> = [];
-  readonly sessionManager: SessionManager;
-  private readonly handlers = new Map<string, Handler>();
-
-  constructor(
-    readonly cwd: string,
-    options: DeterministicDocsRuntimeOptions = {},
-  ) {
-    this.sessionManager = SessionManager.inMemory(cwd);
-    const pi = {
-      on: (eventName: string, handler: Handler) => {
-        this.handlers.set(eventName, handler);
-      },
-      appendEntry: (customType: string, data?: unknown) => {
-        this.appended.push({ customType, data });
-      },
-    } as unknown as ExtensionAPI;
-    createDeterministicDocsExtension(options)(pi);
-  }
-
-  private context(signal?: AbortSignal): ExtensionContext {
-    return {
-      cwd: this.cwd,
-      sessionManager: this.sessionManager,
-      signal,
-      model: undefined,
-    } as unknown as ExtensionContext;
-  }
-
-  async emit(
-    eventName: string,
-    event: unknown,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    const handler = this.handlers.get(eventName);
-    if (!handler) throw new Error(`Missing handler: ${eventName}`);
-    return handler(event, this.context(signal));
-  }
-
-  async start(): Promise<void> {
-    await this.emit("session_start", {
-      type: "session_start",
-      reason: "startup",
-    });
-  }
-
-  async preflight(
-    toolCallId: string,
-    path: string,
-    range: { offset?: number; limit?: number } = {},
-  ): Promise<void> {
-    await this.emit("tool_call", {
-      type: "tool_call",
-      toolName: "read",
-      toolCallId,
-      input: { path, ...range },
-    });
-  }
-
-  async result(args: {
-    toolCallId: string;
-    path: string;
-    content?: string;
-    isError?: boolean;
-    offset?: number;
-    limit?: number;
-    signal?: AbortSignal;
-  }): Promise<ReadPatch | undefined> {
-    return (await this.emit(
-      "tool_result",
-      {
-        type: "tool_result",
-        toolName: "read",
-        toolCallId: args.toolCallId,
-        input: {
-          path: args.path,
-          ...(args.offset === undefined ? {} : { offset: args.offset }),
-          ...(args.limit === undefined ? {} : { limit: args.limit }),
-        },
-        content: [{ type: "text", text: args.content ?? `target:${args.path}` }],
-        details: undefined,
-        isError: args.isError ?? false,
-      },
-      args.signal,
-    )) as ReadPatch | undefined;
-  }
-}
 
 function deferred(): {
   promise: Promise<void>;
@@ -125,18 +20,6 @@ function deferred(): {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
-}
-
-function loadedPaths(result: ReadPatch | undefined): string[] {
-  return result?.details?.deterministicDocs?.loaded.map((entry) => entry.path) ?? [];
-}
-
-function textBlocks(result: ReadPatch | undefined): string[] {
-  return (
-    result?.content?.flatMap((block) =>
-      block.type === "text" ? [block.text] : [],
-    ) ?? []
-  );
 }
 
 describe("transactional read observations", () => {
@@ -239,7 +122,7 @@ describe("transactional read observations", () => {
     const explicit = harness.result({
       toolCallId: "explicit",
       path: "nested/AGENTS.md",
-      content: "nested instructions",
+      text: "nested instructions",
     });
     const [automaticResult, explicitResult] = await Promise.all([
       automatic,
@@ -274,7 +157,7 @@ describe("transactional read observations", () => {
     const result = await harness.result({
       toolCallId: "ranged",
       path: "nested/AGENTS.md",
-      content: "nested instructions line 1",
+      text: "nested instructions line 1",
       limit: 1,
     });
 
