@@ -24,12 +24,15 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.74.0",
-    "@earendil-works/pi-coding-agent": "0.74.0",
-    "@types/node": "^20.19.26",
-    "typescript": "^5.9.3"
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "@types/node": "^24.12.4",
+    "typescript": "^5.9.3",
+    "vitest": "4.1.9"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "test": "vitest --run",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm test && pnpm typecheck"
   }
 }

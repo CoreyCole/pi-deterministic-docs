@@ -131,9 +131,11 @@ export default function deterministicDocs(pi: ExtensionAPI) {
     const cwd = ctx.cwd;
     const readTool = getReadTool(cwd);
     const target = resolveReadTarget(cwd, params.path);
-    const candidates = findAncestorDocsFiles(target.absolutePath);
+    if (!target) return undefined;
+
+    const candidates = findAncestorDocsFiles(target);
     const explicitContextPath = candidates.find(
-      (docPath) => docPath === target.absolutePath,
+      (docPath) => docPath === target.canonicalPath,
     );
     const autoLoaded: AutoLoadedDocsRead[] = [];
     const skipped: string[] = [];
@@ -149,14 +151,14 @@ export default function deterministicDocs(pi: ExtensionAPI) {
           path: explicitContextPath,
           hash,
           loadedAt: new Date().toISOString(),
-          triggerPath: target.absolutePath,
+          triggerPath: target.canonicalPath,
         };
         rememberDocsFile(state, entry, pi.appendEntry);
       }
     }
 
     for (const docPath of candidates) {
-      if (docPath === target.absolutePath) {
+      if (docPath === target.canonicalPath) {
         skipped.push(docPath);
         continue;
       }
@@ -187,7 +189,7 @@ export default function deterministicDocs(pi: ExtensionAPI) {
           path: docPath,
           hash,
           loadedAt: new Date().toISOString(),
-          triggerPath: target.absolutePath,
+          triggerPath: target.canonicalPath,
         };
         rememberDocsFile(state, entry, pi.appendEntry);
         return { entry, result };

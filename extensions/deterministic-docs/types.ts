@@ -11,7 +11,8 @@ export interface DeterministicDocsStateSnapshot {
 
 export interface ResolvedReadTarget {
   requestedPath: string;
-  absolutePath: string;
+  canonicalCwd: string;
+  canonicalPath: string;
 }
 
 export interface DocsCandidate {
