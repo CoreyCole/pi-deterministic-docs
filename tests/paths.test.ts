@@ -1,6 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { findAncestorDocsFiles, resolveReadTarget } from "../extensions/deterministic-docs/paths";
+import {
+  findAncestorDocsFiles,
+  resolveReadTarget,
+} from "../extensions/deterministic-docs/paths";
 import { createFixture, type Fixture } from "./fixtures";
 
 function discover(cwd: string, targetPath: string): string[] {
@@ -57,7 +60,34 @@ describe("cwd-bounded instruction discovery", () => {
     fixture.file("project/nested/readme.md");
     fixture.file("project/nested/main.ts");
 
-    expect(discover(fixture.directory("project"), "nested/main.ts")).toEqual([]);
+    expect(discover(fixture.directory("project"), "nested/main.ts")).toEqual(
+      [],
+    );
+  });
+
+  it("does not discover instructions for skill files", () => {
+    fixture.file("project/AGENTS.md");
+    fixture.file("project/.agents/skills/one/SKILL.md");
+    fixture.file("project/.pi/skills/two/SKILL.md");
+    fixture.file("project/.pi/agent/skills/three/SKILL.md");
+    const cwd = fixture.directory("project");
+
+    expect(discover(cwd, ".agents/skills/one/SKILL.md")).toEqual([]);
+    expect(discover(cwd, ".pi/skills/two/SKILL.md")).toEqual([]);
+    expect(discover(cwd, ".pi/agent/skills/three/SKILL.md")).toEqual([]);
+  });
+
+  it("uses the requested skill path when canonicalization removes its marker", () => {
+    fixture.file("project/AGENTS.md");
+    fixture.file("project/config/agent/skills/example/SKILL.md");
+    fixture.symlink(fixture.directory("project/config"), "project/.pi");
+
+    expect(
+      discover(
+        fixture.directory("project"),
+        ".pi/agent/skills/example/SKILL.md",
+      ),
+    ).toEqual([]);
   });
 
   it("rejects absolute and relative targets outside cwd", () => {
@@ -66,7 +96,9 @@ describe("cwd-bounded instruction discovery", () => {
     const cwd = fixture.directory("workspace/project");
 
     expect(resolveReadTarget(cwd, outsidePath)).toBeUndefined();
-    expect(resolveReadTarget(cwd, path.join("..", "outside.ts"))).toBeUndefined();
+    expect(
+      resolveReadTarget(cwd, path.join("..", "outside.ts")),
+    ).toBeUndefined();
   });
 
   it("uses the same canonical identities for direct and symlink targets", () => {

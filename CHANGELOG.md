@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Excluded skill reads from automatic instruction discovery.
 - Limited instruction discovery to canonical read targets inside the current directory.
 - Limited automatic context to `AGENTS.md` and `CLAUDE.md` instruction files.
 - Made observation state follow the active Pi session branch and canonical content hash.

@@ -1,4 +1,10 @@
-import { accessSync, constants, lstatSync, realpathSync, statSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  lstatSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ResolvedReadTarget } from "./types";
@@ -60,10 +66,12 @@ function resolveReadPath(filePath: string, cwd: string): string {
   if (nfdVariant !== resolved && fileExists(nfdVariant)) return nfdVariant;
 
   const curlyVariant = tryCurlyQuoteVariant(resolved);
-  if (curlyVariant !== resolved && fileExists(curlyVariant)) return curlyVariant;
+  if (curlyVariant !== resolved && fileExists(curlyVariant))
+    return curlyVariant;
 
   const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
-  if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) return nfdCurlyVariant;
+  if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant))
+    return nfdCurlyVariant;
 
   return resolved;
 }
@@ -163,7 +171,25 @@ function instructionFileIn(directory: string): string | undefined {
   return undefined;
 }
 
+export function isSkillPath(targetPath: string): boolean {
+  const segments = path.normalize(targetPath).split(path.sep);
+
+  return segments.some((segment, index) => {
+    if (segment === ".agents") return segments[index + 1] === "skills";
+    if (segment !== ".pi") return false;
+
+    return (
+      segments[index + 1] === "skills" ||
+      (segments[index + 1] === "agent" && segments[index + 2] === "skills")
+    );
+  });
+}
+
 export function findAncestorDocsFiles(target: ResolvedReadTarget): string[] {
+  if (isSkillPath(target.requestedPath) || isSkillPath(target.canonicalPath)) {
+    return [];
+  }
+
   return directoriesForTarget(target).flatMap((directory) => {
     const candidate = instructionFileIn(directory);
     return candidate ? [candidate] : [];

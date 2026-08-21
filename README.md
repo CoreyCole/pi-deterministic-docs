@@ -15,6 +15,14 @@ Each directory can supply one instruction file:
 1. A regular `AGENTS.md` has first priority.
 1. A regular `CLAUDE.md` is used only if `AGENTS.md` is absent.
 
+Skill reads do not receive inferred context. This rule applies to files under these directories:
+
+- `.agents/skills/`
+- `.pi/skills/`
+- `.pi/agent/skills/`
+
+This exclusion prevents a skill read from loading instructions for its source repository.
+
 The extension does not load `README.md` files. Reads outside the current directory do not receive inferred context.
 
 Symlink and direct paths use the same canonical identity. Missing targets, directories, and paths that cannot be resolved do not start discovery.
